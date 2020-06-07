@@ -45,18 +45,12 @@ SamplingWithReplacement * SamplingWithReplacement::GenerateSingleSamplingSet(
    const size_t cInstances = pOriginDataSet->GetCountInstances();
    EBM_ASSERT(0 < cInstances); // if there were no instances, we wouldn't be called
 
-   if(IsMultiplyError(sizeof(size_t), cInstances)) {
-      LOG_0(TraceLevelWarning, "WARNING SamplingWithReplacement::GenerateSingleSamplingSet IsMultiplyError(sizeof(size_t), cInstances)");
-      return nullptr;
-   }
-   const size_t cBytesData = sizeof(size_t) * cInstances;
-   size_t * const aCountOccurrences = static_cast<size_t *>(malloc(cBytesData));
+   size_t * const aCountOccurrences = MallocArray<size_t>(cInstances);
    if(nullptr == aCountOccurrences) {
       LOG_0(TraceLevelWarning, "WARNING SamplingWithReplacement::GenerateSingleSamplingSet nullptr == aCountOccurrences");
       return nullptr;
    }
-
-   memset(aCountOccurrences, 0, cBytesData);
+   memset(aCountOccurrences, 0, sizeof(size_t) * cInstances);
 
    try {
       for(size_t iInstance = 0; iInstance < cInstances; ++iInstance) {
@@ -65,6 +59,7 @@ SamplingWithReplacement * SamplingWithReplacement::GenerateSingleSamplingSet(
       }
    } catch(...) {
       // pRandomStream->Next can throw exceptions from the random number generator, possibly (it's not documented)
+      free(aCountOccurrences);
       LOG_0(TraceLevelWarning, "WARNING SamplingWithReplacement::GenerateSingleSamplingSet random number generator exception");
       return nullptr;
    }
@@ -116,7 +111,7 @@ void SamplingWithReplacement::FreeSamplingSets(const size_t cSamplingSets, Sampl
       for(size_t iSamplingSet = 0; iSamplingSet < cSamplingSetsAfterZero; ++iSamplingSet) {
          delete apSamplingSets[iSamplingSet];
       }
-      delete[] apSamplingSets;
+      free(apSamplingSets);
    }
    LOG_0(TraceLevelInfo, "Exited SamplingWithReplacement::FreeSamplingSets");
 }
@@ -133,12 +128,13 @@ SamplingMethod ** SamplingWithReplacement::GenerateSamplingSets(
 
    const size_t cSamplingSetsAfterZero = 0 == cSamplingSets ? 1 : cSamplingSets;
 
-   SamplingMethod ** apSamplingSets = new (std::nothrow) SamplingMethod *[cSamplingSetsAfterZero];
+   SamplingMethod ** apSamplingSets = MallocArray<SamplingMethod *>(cSamplingSetsAfterZero);
    if(UNLIKELY(nullptr == apSamplingSets)) {
       LOG_0(TraceLevelWarning, "WARNING SamplingWithReplacement::GenerateSamplingSets nullptr == apSamplingSets");
       return nullptr;
    }
    if(0 == cSamplingSets) {
+      // zero is a special value that really means allocate one set that contains all instances.
       SamplingWithReplacement * const pSingleSamplingSet = GenerateFlatSamplingSet(pOriginDataSet);
       if(UNLIKELY(nullptr == pSingleSamplingSet)) {
          LOG_0(TraceLevelWarning, "WARNING SamplingWithReplacement::GenerateSamplingSets nullptr == pSingleSamplingSet");

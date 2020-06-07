@@ -15,14 +15,6 @@
 #include "ebm_native.h"
 
 #define UNUSED(x) (void)(x)
-// UBSAN really doesn't like it when we access data past the end of a class eg( p->m_a[2], when m_a is declared as an array of 1)
-// We do this however in a number of places to co-locate memory for performance reasons.  We do allocate sufficient memory for doing this, and we 
-// also statically check that our classes are standard layout structures (even if declared as classes), so accessing that memory is legal.
-// this MACRO turns an array reference into a pointer to the same type of object, which resolves any UBSAN warnings
-
-// TODO : the const and non-const macros can probably be unified
-#define ARRAY_TO_POINTER(x) (reinterpret_cast<typename std::remove_all_extents<decltype(x)>::type *>(reinterpret_cast<void *>(x)))
-#define ARRAY_TO_POINTER_CONST(x) (reinterpret_cast<const typename std::remove_all_extents<decltype(x)>::type *>(reinterpret_cast<const void *>(x)))
 
 // here's how to detect the compiler type for a variety of compilers -> https://sourceforge.net/p/predef/wiki/Compilers/
 // disabling warnings with _Pragma detailed info here https://stackoverflow.com/questions/3378560/how-to-disable-gcc-warnings-for-a-few-lines-of-code
@@ -151,6 +143,24 @@ constexpr FloatEbmType k_epsilonNegativeGainAllowed = -1e-7;
 constexpr FloatEbmType k_epsilonNegativeValidationMetricAllowed = -1e-7;
 constexpr FloatEbmType k_epsilonResidualError = 1e-7;
 constexpr FloatEbmType k_epsilonLogLoss = 1e-7;
+
+// UBSAN really doesn't like it when we access data past the end of a class 
+// eg: p->m_a[2], when m_a is declared as an array of 1
+// We do this however in a number of places to co-locate memory for performance reasons.  We do allocate 
+// sufficient memory for doing this, and we also statically check that our classes are standard layout structures
+// (even if declared as classes), so accessing that memory is legal. ArrayToPointer turns an array reference 
+// into a pointer to the same type of object, which resolves any UBSAN warnings.
+// Our static analysis tools also dislike this kind of array to pointer conversion
+template<typename T>
+EBM_INLINE T * ArrayToPointer(T * const a) {
+//   return reinterpret_cast<typename std::remove_all_extents<decltype(a)>::type *>(reinterpret_cast<void *>(a));
+   return a;
+}
+template<typename T>
+EBM_INLINE const T * ArrayToPointer(const T * a) {
+//   return reinterpret_cast<const typename std::remove_all_extents<decltype(a)>::type *>(reinterpret_cast<const void *>(a));
+   return a;
+}
 
 WARNING_PUSH
 WARNING_DISABLE_SIGNED_UNSIGNED_MISMATCH
@@ -363,12 +373,31 @@ constexpr EBM_INLINE bool IsAddError(const size_t num1, const size_t num2) {
    return num1 + num2 < num1;
 }
 
-// TODO: use this a lot more.  std::nothrow on new apparently doesn't always work, so we should probably catch the allocation exceptions instead or use this
-EBM_INLINE void * SmartMalloc(size_t cItems, size_t cBytesPerItem) {
+// TODO: use this a lot more
+template<typename T>
+EBM_INLINE T * MallocArray(size_t cItems, size_t cBytesPerItem = sizeof(T)) {
+   // using std::nothrow on new apparently doesn't always return nullptr on all compilers.  Sometimes it just exits.
+   // This library sometimes allocates large amounts of memory and we'd like to gracefully handle the case where
+   // that large amount of memory is too large.  So, instead of using new[] and delete[] we use malloc and free
+   // everywhere for arrays.  This helper function makes it a bit nicer than pure malloc.
+   //
+   // For our own objects, we should probably just define a static CLASS_NAME::Allocate(...) function for allocation
+   // and OBJECT::Free() for deallocation and use malloc/free internally.
+   //
+   // For classes that we don't control, continue to use new and delete with std::nothrow for class objects though, 
+   // since the memory allocated that way is modest in size, and to use malloc and free for class objects would 
+   // reqiure using the inplace constructors and manually call the destructors instead of delete, and all of that 
+   // is pretty confusing to developers, but arrays require a different call to delete[] anyways which is separate 
+   // from delete, so using free instead  is maybe even a bit less confusing for keeping object and array 
+   // allocations separate.
+   // 
+   // We do also occasionally use malloc to allocate combined memory regions of multiple types, so we do use free
+   // in some cases anyways, so keeping just one type of free function (free instead of delete[]) is simpler.
+
    if(IsMultiplyError(cItems, cBytesPerItem)) {
       return nullptr;
    } else {
-      return malloc(cItems * cBytesPerItem);
+      return static_cast<T *>(malloc(cItems * cBytesPerItem));
    }
 }
 
